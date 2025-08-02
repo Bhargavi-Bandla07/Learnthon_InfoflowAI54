@@ -2,7 +2,7 @@ import os
 import streamlit as st
 from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import Chroma
+from langchain.vectorstores import FAISS  # ✅ Use FAISS
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 from langchain_community.chat_models import ChatOllama  # 🧠 Use Ollama LLM
@@ -22,17 +22,17 @@ chunks = splitter.split_documents(documents)
 # HuggingFace Embeddings (offline)
 embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Vector DB with Chroma
-vectorstore = Chroma.from_documents(chunks, embedding)
+# ✅ Use FAISS instead of Chroma
+vectorstore = FAISS.from_documents(chunks, embedding)
 
 # 🧠 Use Ollama's LLaMA3 model
-llm = ChatOllama(model="llama3")  # make sure `ollama run llama3` is running
+llm = ChatOllama(model="llama3")  # Make sure `ollama run llama3` is running in background
 
 # Retrieval-based QA chain
 qa = RetrievalQA.from_chain_type(llm=llm, retriever=vectorstore.as_retriever())
 
 # Streamlit UI
-st.title("🤖 InfoFlow AI Chatbot (Understands All Questions!)")
+st.title("🤖 InfoFlow AI Chatbot (Understands Your Company Environment)")
 question = st.text_input("Ask your company question:")
 
 if question:
