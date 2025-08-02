@@ -1,4 +1,8 @@
-openai
-langchain
-chromadb
 streamlit
+langchain
+langchain-community
+chromadb
+sentence-transformers
+huggingface-hub
+tiktoken
+pydantic<2.0
