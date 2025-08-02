@@ -6,3 +6,4 @@ sentence-transformers
 huggingface-hub
 tiktoken
 pydantic<2.0
+faiss-cpu
