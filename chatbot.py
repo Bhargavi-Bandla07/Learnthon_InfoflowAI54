@@ -1,40 +1,220 @@
-import os
 import streamlit as st
-from langchain_community.document_loaders import TextLoader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import FAISS  # ✅ Use FAISS
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.chains import RetrievalQA
-from langchain_community.chat_models import ChatOllama  # 🧠 Use Ollama LLM
+import mysql.connector
+import re
 
-# Load documents
-documents = []
-folder_path = "documents"
-for file in os.listdir(folder_path):
-    if file.endswith(".txt"):
-        loader = TextLoader(os.path.join(folder_path, file))
-        documents.extend(loader.load())
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
 
-# Split into chunks
-splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-chunks = splitter.split_documents(documents)
+# -----------------------------
+# 🎨 Streamlit UI
+# -----------------------------
+st.set_page_config(page_title="InfoFlow AI", layout="centered")
+st.title("🤖 InfoFlow AI Chatbot")
 
-# HuggingFace Embeddings (offline)
-embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+# -----------------------------
+# 🔎 Load Embeddings + Vector DB
+# -----------------------------
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
 
-# ✅ Use FAISS instead of Chroma
-vectorstore = FAISS.from_documents(chunks, embedding)
+vectorstore = Chroma(
+    persist_directory="db",
+    embedding_function=embeddings
+)
 
-# 🧠 Use Ollama's LLaMA3 model
-llm = ChatOllama(model="llama3")  # Make sure `ollama run llama3` is running in background
+retriever = vectorstore.as_retriever(search_kwargs={"k": 1})
 
-# Retrieval-based QA chain
-qa = RetrievalQA.from_chain_type(llm=llm, retriever=vectorstore.as_retriever())
+# -----------------------------
+# 🧹 Prompt Cleaner
+# -----------------------------
+def clean_prompt(text):
+    text = re.sub(r"[^\w\s]", "", text)  # remove punctuation
+    text = re.sub(r"\s+", " ", text)     # remove extra spaces
+    return text.strip()
 
-# Streamlit UI
-st.title("🤖 InfoFlow AI Chatbot (Understands Your Company Environment)")
-question = st.text_input("Ask your company question:")
+# -----------------------------
+# 🗄️ DB-Driven Name Detection
+# -----------------------------
+def extract_employee_from_prompt(prompt):
 
-if question:
-    answer = qa.run(question)
-    st.success(answer)
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="32939",
+        database="company_db"
+    )
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM employees")
+    employees = cursor.fetchall()
+    conn.close()
+
+    prompt_clean = clean_prompt(prompt).lower()
+
+    for (name,) in employees:
+        if name.lower() in prompt_clean:
+            return name
+
+    return None
+
+# -----------------------------
+# 🗄️ SQL Functions
+# -----------------------------
+def get_employee_details(prompt):
+
+    name = extract_employee_from_prompt(prompt)
+
+    if not name:
+        return "Employee not found"
+
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="32939",
+        database="company_db"
+    )
+
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM employees WHERE name=%s", (name,))
+    emp = cursor.fetchone()
+
+    cursor.execute(
+        "SELECT project_name FROM projects WHERE employee_name=%s",
+        (name,)
+    )
+    projects_data = cursor.fetchall()
+
+    conn.close()
+
+    projects = ", ".join([p["project_name"] for p in projects_data]) if projects_data else "No project assigned"
+    designation = "Team Lead" if emp["is_team_lead"] else "Team Member"
+
+    return f"""
+👤 Name: {emp['name']}
+📌 Role: {emp['role']}
+📞 Contact: {emp['contact']}
+📧 Email: {emp['email']}
+👥 Team: {emp['team']}
+🏷️ Designation: {designation}
+🚀 Project(s): {projects}
+"""
+
+def get_all_employees():
+
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="32939",
+        database="company_db"
+    )
+
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM employees")
+    employees = cursor.fetchall()
+    conn.close()
+
+    if not employees:
+        return "No employees found"
+
+    output = "👥 **Employee Directory**\n\n"
+
+    for emp in employees:
+        designation = "Team Lead" if emp["is_team_lead"] else "Team Member"
+
+        output += f"""
+👤 **{emp['name']}**
+📌 Role: {emp['role']}
+📞 Contact: {emp['contact']}
+📧 Email: {emp['email']}
+👥 Team: {emp['team']}
+🏷️ Designation: {designation}
+
+"""
+
+    return output
+
+# -----------------------------
+# 💬 Chat Memory
+# -----------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Hi 👋 Ask me anything!"}
+    ]
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+
+# -----------------------------
+# 💬 User Input
+# -----------------------------
+prompt = st.chat_input("Ask your question...")
+
+if prompt:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    with st.chat_message("user"):
+        st.write(prompt)
+
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+
+        prompt_lower = prompt.lower()
+        employee_name = extract_employee_from_prompt(prompt)
+
+        # -----------------------------
+        # 🎯 ROUTING LOGIC
+        # -----------------------------
+        if "leave" in prompt_lower:
+            source = "TXT"
+            search_query = "leave policy " + prompt
+
+        elif "onboard" in prompt_lower or "training" in prompt_lower:
+            source = "TXT"
+            search_query = "onboarding policy " + prompt
+
+        elif "all employees" in prompt_lower or "show employees" in prompt_lower:
+            source = "SQL_ALL"
+
+        elif employee_name:
+            source = "SQL"
+
+        elif "employee" in prompt_lower or "details" in prompt_lower:
+            source = "SQL"
+
+        else:
+            source = "TXT"
+            search_query = prompt
+
+        # -----------------------------
+        # 📄 TXT Retrieval (RAG)
+        # -----------------------------
+        if source == "TXT":
+            relevant_docs = retriever.get_relevant_documents(search_query)
+            context = "\n\n".join([doc.page_content for doc in relevant_docs])
+
+            full_reply = context if context.strip() else "Not available in knowledge base"
+            source_label = "📄 Policy Documents"
+
+        # -----------------------------
+        # 🗄️ SQL Retrieval
+        # -----------------------------
+        elif source == "SQL":
+            full_reply = get_employee_details(prompt)
+            source_label = "🗄️ Employee Database"
+
+        elif source == "SQL_ALL":
+            full_reply = get_all_employees()
+            source_label = "🗄️ Employee Database"
+
+        # -----------------------------
+        # 💬 Display Response
+        # -----------------------------
+        message_placeholder.write(full_reply)
+        st.caption(f"Source: {source_label}")
+
+    st.session_state.messages.append(
+        {"role": "assistant", "content": full_reply}
+    )
